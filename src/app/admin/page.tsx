@@ -229,8 +229,9 @@ export default function AdminPage() {
   }
 
   async function handleCloseAndReset() {
+    const hadSession = !!session
     await performSessionReset()
-    toast.success('Session closed and reset')
+    toast.success(hadSession ? 'Session closed and reset' : 'Session started')
   }
 
   async function handleApproveRequest(requestId: string) {
