@@ -19,14 +19,7 @@ type Order = {
   created_at: string
 }
 
-type ResetRequest = {
-  id: string
-  requested_by: string
-  status: string
-  created_at: string
-}
-
-type AdminTab = 'session' | 'requests' | 'history' | 'settings'
+type AdminTab = 'session' | 'history' | 'settings'
 
 const STORAGE_KEY = 'kopitiam_admin_token'
 
@@ -45,9 +38,6 @@ export default function AdminPage() {
   const [session, setSession] = useState<OrderSession | null>(null)
   const [orders, setOrders] = useState<Order[]>([])
   const [resetting, setResetting] = useState(false)
-
-  // Reset requests
-  const [pendingRequests, setPendingRequests] = useState<ResetRequest[]>([])
 
   // History
   const [pastSessions, setPastSessions] = useState<OrderSession[]>([])
@@ -93,13 +83,6 @@ export default function AdminPage() {
         setOrders(ordData ?? [])
       }
 
-      const { data: reqData } = await supabase
-        .from('reset_requests')
-        .select('*')
-        .eq('status', 'pending')
-        .order('created_at', { ascending: true })
-      setPendingRequests(reqData ?? [])
-
       const { data: pastData } = await supabase
         .from('order_sessions')
         .select('*')
@@ -131,33 +114,6 @@ export default function AdminPage() {
       .subscribe()
     return () => { supabase.removeChannel(channel) }
   }, [session, token])
-
-  // Realtime: reset requests
-  useEffect(() => {
-    if (!token) return
-    const channel = supabase
-      .channel('admin-reset-requests')
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'reset_requests' },
-        payload => {
-          const req = payload.new as ResetRequest
-          if (req.status === 'pending') setPendingRequests(prev => [...prev, req])
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'reset_requests' },
-        payload => {
-          const req = payload.new as ResetRequest
-          if (req.status !== 'pending') {
-            setPendingRequests(prev => prev.filter(r => r.id !== req.id))
-          }
-        }
-      )
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
-  }, [token])
 
   async function handleLogin() {
     if (!loginPassword.trim()) return
@@ -194,7 +150,6 @@ export default function AdminPage() {
     setToken(null)
     setSession(null)
     setOrders([])
-    setPendingRequests([])
     setPastSessions([])
   }
 
@@ -232,17 +187,6 @@ export default function AdminPage() {
     const hadSession = !!session
     await performSessionReset()
     toast.success(hadSession ? 'Session closed and reset' : 'Session started')
-  }
-
-  async function handleApproveRequest(requestId: string) {
-    await supabase.from('reset_requests').update({ status: 'approved' }).eq('id', requestId)
-    await performSessionReset()
-    toast.success('Request approved — session reset')
-  }
-
-  async function handleRejectRequest(requestId: string) {
-    await supabase.from('reset_requests').update({ status: 'rejected' }).eq('id', requestId)
-    toast('Request rejected')
   }
 
   async function handleExpandSession(sess: OrderSession) {
@@ -362,10 +306,6 @@ export default function AdminPage() {
   // ── Admin UI ──
   const TABS: { key: AdminTab; label: string }[] = [
     { key: 'session', label: 'Session' },
-    {
-      key: 'requests',
-      label: pendingRequests.length > 0 ? `Requests (${pendingRequests.length})` : 'Requests',
-    },
     { key: 'history', label: 'History' },
     { key: 'settings', label: 'Settings' },
   ]
@@ -449,49 +389,6 @@ export default function AdminPage() {
             >
               {resetting ? 'Starting…' : session ? 'Close & Reset Session' : 'Start New Session'}
             </button>
-          </div>
-        )}
-
-        {/* ── Requests tab ── */}
-        {activeTab === 'requests' && (
-          <div className="space-y-4">
-            <h2 className="text-base font-semibold text-stone-800">Pending Reset Requests</h2>
-
-            {pendingRequests.length === 0 ? (
-              <p className="text-sm text-stone-400 text-center py-6">No pending requests</p>
-            ) : (
-              <div className="space-y-3">
-                {pendingRequests.map(req => (
-                  <div
-                    key={req.id}
-                    className="bg-white border border-stone-200 rounded-lg p-4 space-y-3"
-                  >
-                    <div>
-                      <p className="font-semibold text-stone-800 text-sm">{req.requested_by}</p>
-                      <p className="text-xs text-stone-400 mt-0.5">{formatDateTime(req.created_at)}</p>
-                    </div>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() => handleApproveRequest(req.id)}
-                        disabled={resetting}
-                        className="flex-1 bg-green-600 text-white rounded-lg py-2 text-sm font-medium disabled:opacity-50 hover:bg-green-700 transition-colors"
-                      >
-                        Approve & Reset
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleRejectRequest(req.id)}
-                        disabled={resetting}
-                        className="flex-1 bg-stone-200 text-stone-700 rounded-lg py-2 text-sm font-medium hover:bg-stone-300 transition-colors"
-                      >
-                        Reject
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
           </div>
         )}
 

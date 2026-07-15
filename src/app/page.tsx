@@ -56,8 +56,6 @@ export default function Home() {
   const [selectedDrink, setSelectedDrink] = useState<DrinkMenuItem | null>(null)
   const [selectedModifierIds, setSelectedModifierIds] = useState<string[]>([])
   const [submitting, setSubmitting] = useState(false)
-  const [resetModalOpen, setResetModalOpen] = useState(false)
-  const [resetName, setResetName] = useState('')
 
   // Derived: categories sorted Coffee → Tea → Others
   const categories = Array.from(new Set(drinks.map(d => d.category))).sort((a, b) => {
@@ -241,17 +239,6 @@ export default function Home() {
     // state updated via Realtime DELETE event
   }
 
-  async function handleSendResetRequest() {
-    if (!resetName.trim()) return
-    await supabase.from('reset_requests').insert({
-      requested_by: resetName.trim(),
-      status: 'pending',
-    })
-    setResetModalOpen(false)
-    setResetName('')
-    toast('Reset request sent to admin')
-  }
-
   const canAddOrder =
     !submitting && !!personName.trim() && !!session?.is_active && !!selectedDrink
 
@@ -281,7 +268,7 @@ export default function Home() {
       ) : (
         <main className="px-4 py-6 space-y-8 max-w-md mx-auto">
           {/* ── Section 1: Place Your Order ── */}
-          <section className="space-y-4">
+          <section className={`space-y-4 ${!session?.is_active ? 'opacity-40 pointer-events-none select-none' : ''}`}>
             <h2 className="text-lg font-semibold text-amber-900">Place Your Order</h2>
 
             {/* Name input */}
@@ -379,17 +366,6 @@ export default function Home() {
               )}
             </div>
 
-            {/* No session warning */}
-            {!session?.is_active && (
-              <p className="text-sm text-center text-amber-700 bg-amber-100 border border-amber-200 rounded-lg px-4 py-3">
-                No active session. Ask the admin to start one at{' '}
-                <a href="/admin" className="font-semibold underline">
-                  /admin
-                </a>
-                .
-              </p>
-            )}
-
             {/* Add to Order */}
             <button
               type="button"
@@ -400,6 +376,15 @@ export default function Home() {
               {submitting ? 'Adding…' : 'Add to Order'}
             </button>
           </section>
+
+          {/* ── Waiting state ── */}
+          {!session?.is_active && (
+            <div className="text-center py-10 space-y-2">
+              <p className="text-4xl">☕</p>
+              <p className="font-semibold text-amber-900">Waiting for session to start</p>
+              <p className="text-sm text-amber-600">The admin will start a new round soon.</p>
+            </div>
+          )}
 
           {/* ── Section 2: Live Orders ── */}
           <section>
@@ -449,56 +434,7 @@ export default function Home() {
             )}
           </section>
 
-          {/* ── Request Reset ── */}
-          <div className="flex justify-center pb-4">
-            <button
-              type="button"
-              onClick={() => setResetModalOpen(true)}
-              className="border-2 border-amber-900 text-amber-900 rounded-xl px-6 py-3 text-sm font-semibold hover:bg-amber-100 transition-colors"
-            >
-              Request Reset
-            </button>
-          </div>
         </main>
-      )}
-
-      {/* Reset Modal */}
-      {resetModalOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl w-full max-w-sm p-6 space-y-4">
-            <h3 className="text-base font-bold text-amber-900">Request Session Reset</h3>
-            <div>
-              <label className="block text-sm font-medium text-amber-800 mb-1">Your name</label>
-              <input
-                type="text"
-                value={resetName}
-                onChange={e => setResetName(e.target.value)}
-                placeholder="Enter your name"
-                className="w-full border border-amber-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
-              />
-            </div>
-            <div className="flex gap-3">
-              <button
-                type="button"
-                onClick={() => {
-                  setResetModalOpen(false)
-                  setResetName('')
-                }}
-                className="flex-1 border border-amber-300 text-amber-700 rounded-xl py-2 text-sm font-medium"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleSendResetRequest}
-                disabled={!resetName.trim()}
-                className="flex-1 bg-amber-700 text-white rounded-xl py-2 text-sm font-medium disabled:opacity-50"
-              >
-                Send Request
-              </button>
-            </div>
-          </div>
-        </div>
       )}
     </div>
   )
