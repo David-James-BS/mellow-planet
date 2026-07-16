@@ -101,6 +101,7 @@ export default function Home() {
   })
 
   const drinksInCategory = drinks.filter(d => d.category === activeCategory)
+  const showDrinkCards = !['Coffee', 'Tea'].includes(activeCategory)
 
   const selectedModifierIdsByGroup = orderedGroups(selectedDrink?.available_modifiers ?? [])
     .reduce<Record<string, string | undefined>>((selected, group) => {
@@ -541,22 +542,24 @@ export default function Home() {
                 ))}
               </div>
 
-              <div className="grid grid-cols-2 gap-2">
-                {drinksInCategory.map(drink => (
-                  <button
-                    key={drink.id}
-                    type="button"
-                    onClick={() => handleSelectDrink(drink)}
-                    className={`min-h-[64px] rounded-xl border-2 p-3 text-sm font-medium text-left transition-colors ${
-                      selectedDrink?.id === drink.id
-                        ? 'border-amber-600 bg-amber-50 text-amber-900'
-                        : 'bg-white border-amber-100 text-amber-800'
-                    }`}
-                  >
-                    {drink.base_name}
-                  </button>
-                ))}
-              </div>
+              {showDrinkCards && (
+                <div className="grid grid-cols-2 gap-2">
+                  {drinksInCategory.map(drink => (
+                    <button
+                      key={drink.id}
+                      type="button"
+                      onClick={() => handleSelectDrink(drink)}
+                      className={`min-h-[64px] rounded-xl border-2 p-3 text-sm font-medium text-left transition-colors ${
+                        selectedDrink?.id === drink.id
+                          ? 'border-amber-600 bg-amber-50 text-amber-900'
+                          : 'bg-white border-amber-100 text-amber-800'
+                      }`}
+                    >
+                      {drink.base_name}
+                    </button>
+                  ))}
+                </div>
+              )}
 
               {selectedDrink && selectedDrink.available_modifiers.length > 0 && (
                 <div className="space-y-3">
