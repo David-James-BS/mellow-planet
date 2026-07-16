@@ -153,14 +153,22 @@ export default function MenuPage() {
       category,
       available_modifiers: editDrink.available_modifiers,
     }
-    await supabase.from('drinks_menu').update(updated).eq('id', editingDrinkId)
+    const { error } = await supabase.from('drinks_menu').update(updated).eq('id', editingDrinkId)
+    if (error) {
+      toast.error(`Could not update drink: ${error.message}`)
+      return
+    }
     setDrinks(prev => prev.map(d => d.id === editingDrinkId ? { ...d, ...updated } as DrinkMenuItem : d))
     setEditingDrinkId(null)
     toast.success('Drink updated')
   }
 
   async function deleteDrink(id: string) {
-    await supabase.from('drinks_menu').delete().eq('id', id)
+    const { error } = await supabase.from('drinks_menu').delete().eq('id', id)
+    if (error) {
+      toast.error(`Could not delete drink: ${error.message}`)
+      return
+    }
     setDrinks(prev => prev.filter(d => d.id !== id))
     setConfirmDeleteDrinkId(null)
     toast('Drink deleted')
@@ -170,11 +178,15 @@ export default function MenuPage() {
     if (!addDrink.base_name.trim()) return
     const category = addDrink.category === '__new__' ? addDrink.customCategory.trim() : addDrink.category
     if (!category) return
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('drinks_menu')
       .insert({ base_name: addDrink.base_name.trim(), category, available_modifiers: addDrink.available_modifiers })
       .select()
       .single()
+    if (error) {
+      toast.error(`Could not add drink: ${error.message}`)
+      return
+    }
     if (data) setDrinks(prev => [...prev, data as DrinkMenuItem])
     setAddDrink({ ...BLANK_DRINK_FORM })
     setShowAddDrink(false)
@@ -192,10 +204,15 @@ export default function MenuPage() {
     const other = group[swapIdx]
     const newSortA = other.sort_order
     const newSortB = mod.sort_order
-    await Promise.all([
+    const [firstUpdate, secondUpdate] = await Promise.all([
       supabase.from('modifiers').update({ sort_order: newSortA }).eq('id', mod.id),
       supabase.from('modifiers').update({ sort_order: newSortB }).eq('id', other.id),
     ])
+    const error = firstUpdate.error ?? secondUpdate.error
+    if (error) {
+      toast.error(`Could not reorder modifier: ${error.message}`)
+      return
+    }
     setModifiers(prev => prev.map(m => {
       if (m.id === mod.id) return { ...m, sort_order: newSortA }
       if (m.id === other.id) return { ...m, sort_order: newSortB }
@@ -211,14 +228,28 @@ export default function MenuPage() {
 
   async function saveEditMod() {
     if (!editingModId || !editMod.label.trim()) return
-    await supabase.from('modifiers').update({ label: editMod.label.trim(), shortcode: editMod.shortcode.trim() }).eq('id', editingModId)
+    const { error } = await supabase.from('modifiers').update({ label: editMod.label.trim(), shortcode: editMod.shortcode.trim() }).eq('id', editingModId)
+    if (error) {
+      toast.error(`Could not update modifier: ${error.message}`)
+      return
+    }
     setModifiers(prev => prev.map(m => m.id === editingModId ? { ...m, label: editMod.label.trim(), shortcode: editMod.shortcode.trim() } : m))
     setEditingModId(null)
     toast.success('Modifier updated')
   }
 
   async function deleteMod(id: string) {
-    await supabase.from('modifiers').delete().eq('id', id)
+    const mod = modifiers.find(m => m.id === id)
+    if (mod && (modsByGroup[mod.group_name] ?? []).length <= 1) {
+      toast.error('Keep at least one option in each modifier group')
+      return
+    }
+
+    const { error } = await supabase.from('modifiers').delete().eq('id', id)
+    if (error) {
+      toast.error(`Could not delete modifier: ${error.message}`)
+      return
+    }
     setModifiers(prev => prev.filter(m => m.id !== id))
     setConfirmDeleteModId(null)
     toast('Modifier deleted')
@@ -228,11 +259,15 @@ export default function MenuPage() {
     const form = addModForms[group_name]
     if (!form?.label.trim()) return
     const maxSort = Math.max(0, ...(modsByGroup[group_name] ?? []).map(m => m.sort_order))
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('modifiers')
       .insert({ group_name, label: form.label.trim(), shortcode: form.shortcode.trim(), sort_order: maxSort + 1 })
       .select()
       .single()
+    if (error) {
+      toast.error(`Could not add modifier: ${error.message}`)
+      return
+    }
     if (data) setModifiers(prev => [...prev, data as Modifier])
     setAddModForms(prev => ({ ...prev, [group_name]: { label: '', shortcode: '', open: false } }))
     toast.success('Modifier added')
@@ -240,11 +275,15 @@ export default function MenuPage() {
 
   async function addNewGroup() {
     if (!newGroup.group_name.trim() || !newGroup.label.trim()) return
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('modifiers')
       .insert({ group_name: newGroup.group_name.trim().toLowerCase(), label: newGroup.label.trim(), shortcode: newGroup.shortcode.trim(), sort_order: 1 })
       .select()
       .single()
+    if (error) {
+      toast.error(`Could not create group: ${error.message}`)
+      return
+    }
     if (data) setModifiers(prev => [...prev, data as Modifier])
     setNewGroup({ group_name: '', label: '', shortcode: '' })
     setShowNewGroup(false)

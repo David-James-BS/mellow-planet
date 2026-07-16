@@ -21,11 +21,13 @@ function MenuIcon() {
   )
 }
 
-function LockIcon() {
+function RoundsIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className="w-full h-full">
-      <rect x="5" y="11" width="14" height="10" rx="2" />
-      <path d="M8 11V7a4 4 0 018 0v4" />
+      <path d="M21 12a9 9 0 11-2.64-6.36" />
+      <path d="M21 3v6h-6" />
+      <path d="M8 12h8" />
+      <path d="M12 8v8" />
     </svg>
   )
 }
@@ -33,7 +35,7 @@ function LockIcon() {
 const tabs = [
   { href: '/',      label: 'Order', Icon: CupIcon },
   { href: '/menu',  label: 'Menu',  Icon: MenuIcon },
-  { href: '/admin', label: 'Admin', Icon: LockIcon },
+  { href: '/admin', label: 'Rounds', Icon: RoundsIcon },
 ]
 
 export default function BottomNav() {
