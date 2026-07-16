@@ -83,6 +83,7 @@ export default function Home() {
   const [drinks, setDrinks] = useState<DrinkMenuItem[]>([])
   const [modifiersByGroup, setModifiersByGroup] = useState<Record<string, Modifier[]>>({})
   const [orders, setOrders] = useState<Order[]>([])
+  const [lastOrder, setLastOrder] = useState<Order | null>(null)
   const [loading, setLoading] = useState(true)
   const [deviceId, setDeviceId] = useState('')
   const [personName, setPersonName] = useState('')
@@ -174,9 +175,34 @@ export default function Home() {
     return activeSession
   }, [])
 
+  const loadLastOrder = useCallback(async (currentDeviceId: string) => {
+    if (!currentDeviceId) {
+      setLastOrder(null)
+      return null
+    }
+
+    const { data, error } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('device_id', currentDeviceId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (error) {
+      toast.error(`Could not load your last order: ${error.message}`)
+      setLastOrder(null)
+      return null
+    }
+
+    setLastOrder((data as Order | null) ?? null)
+    return (data as Order | null) ?? null
+  }, [])
+
   useEffect(() => {
     async function init() {
-      setDeviceId(getStoredDeviceId())
+      const storedDeviceId = getStoredDeviceId()
+      setDeviceId(storedDeviceId)
 
       const savedName = localStorage.getItem(USER_NAME_KEY)
       if (savedName) {
@@ -184,6 +210,7 @@ export default function Home() {
         setNameReady(true)
       }
 
+      await loadLastOrder(storedDeviceId)
       await loadActiveSession()
 
       const { data: drinksData, error: drinksError } = await supabase
@@ -224,7 +251,7 @@ export default function Home() {
     }
 
     init()
-  }, [loadActiveSession])
+  }, [loadActiveSession, loadLastOrder])
 
   useEffect(() => {
     function handleFocus() {
@@ -403,8 +430,57 @@ export default function Home() {
       return
     }
 
+    setLastOrder({
+      id: editingOrderId ?? '',
+      person_name: payload.person_name,
+      drink_description: payload.drink_description,
+      session_id: payload.session_id,
+      created_at: new Date().toISOString(),
+      device_id: payload.device_id,
+      drink_id: payload.drink_id,
+      modifier_ids: payload.modifier_ids,
+    })
     resetBuilder()
     toast.success(editingOrderId ? 'Order updated' : 'Order added')
+  }
+
+  async function handleReorderLastDrink() {
+    if (!session || !personName.trim() || !deviceId || !lastOrder?.drink_description) return
+
+    setSubmitting(true)
+    const payload = {
+      person_name: personName.trim(),
+      drink_description: lastOrder.drink_description,
+      session_id: session.id,
+      device_id: deviceId,
+      drink_id: lastOrder.drink_id,
+      modifier_ids: Array.isArray(lastOrder.modifier_ids) ? lastOrder.modifier_ids : [],
+    }
+
+    const { data, error } = await supabase
+      .from('orders')
+      .insert(payload)
+      .select()
+      .single()
+
+    setSubmitting(false)
+
+    if (error) {
+      toast.error(`Could not reorder: ${error.message}`)
+      return
+    }
+
+    setLastOrder((data as Order | null) ?? {
+      id: '',
+      person_name: payload.person_name,
+      drink_description: payload.drink_description,
+      session_id: payload.session_id,
+      created_at: new Date().toISOString(),
+      device_id: payload.device_id,
+      drink_id: payload.drink_id,
+      modifier_ids: payload.modifier_ids,
+    })
+    toast.success('Order added')
   }
 
   async function handleDeleteOrder(order: Order) {
@@ -521,6 +597,27 @@ export default function Home() {
                 <p className="text-sm font-bold text-amber-900 mt-0.5">
                   {sessionLabel(session.created_at)}
                 </p>
+              </div>
+            )}
+
+            {session?.is_active && nameReady && lastOrder?.drink_description && (
+              <div className="bg-amber-100 border border-amber-300 rounded-lg px-4 py-3 space-y-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">
+                    Your usual
+                  </p>
+                  <p className="text-sm font-bold text-amber-950 mt-0.5">
+                    {lastOrder.drink_description}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleReorderLastDrink}
+                  disabled={submitting}
+                  className="w-full rounded-xl bg-amber-700 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
+                >
+                  {submitting ? 'Adding...' : `Order ${lastOrder.drink_description} again`}
+                </button>
               </div>
             )}
 
