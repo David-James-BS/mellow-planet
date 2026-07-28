@@ -25,9 +25,9 @@ INSERT INTO modifiers (group_name, label, shortcode, sort_order) VALUES
   -- temperature group
   ('temperature', 'Hot',                       '',        1),
   ('temperature', 'Iced (Peng)',               'Peng',    2)
-ON CONFLICT (group_name, sort_order) DO UPDATE
+ON CONFLICT (group_name, shortcode) DO UPDATE
   SET label = EXCLUDED.label,
-      shortcode = EXCLUDED.shortcode;
+      sort_order = EXCLUDED.sort_order;
 
 -- ============================================================
 -- DRINKS MENU

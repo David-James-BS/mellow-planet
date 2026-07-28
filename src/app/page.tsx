@@ -95,13 +95,18 @@ export default function Home() {
   const [checkingRound, setCheckingRound] = useState(false)
   const [editingOrderId, setEditingOrderId] = useState<string | null>(null)
 
-  const categories = Array.from(new Set(drinks.map(d => d.category))).sort((a, b) => {
-    const ai = CATEGORY_ORDER.indexOf(a)
-    const bi = CATEGORY_ORDER.indexOf(b)
-    return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi)
+  const categories = CATEGORY_ORDER.filter(category => {
+    if (category === 'Others') {
+      return drinks.some(drink => !['Coffee', 'Tea'].includes(drink.category))
+    }
+    return drinks.some(drink => drink.category === category)
   })
 
-  const drinksInCategory = drinks.filter(d => d.category === activeCategory)
+  const drinksInCategory = drinks.filter(drink =>
+    activeCategory === 'Others'
+      ? !['Coffee', 'Tea'].includes(drink.category)
+      : drink.category === activeCategory
+  )
   const showDrinkCards = !['Coffee', 'Tea'].includes(activeCategory)
 
   const selectedModifierIdsByGroup = orderedGroups(selectedDrink?.available_modifiers ?? [])
@@ -226,7 +231,9 @@ export default function Home() {
       const dArr: DrinkMenuItem[] = (drinksData ?? []) as DrinkMenuItem[]
       setDrinks(dArr)
 
-      const catSet = new Set(dArr.map(d => d.category))
+      const catSet = new Set(
+        dArr.map(drink => ['Coffee', 'Tea'].includes(drink.category) ? drink.category : 'Others')
+      )
       const firstCat = CATEGORY_ORDER.find(c => catSet.has(c)) ?? dArr[0]?.category ?? ''
       setActiveCategory(firstCat)
 
@@ -361,7 +368,11 @@ export default function Home() {
     setActiveCategory(category)
     setEditingOrderId(null)
 
-    const firstDrink = drinks.find(drink => drink.category === category)
+    const firstDrink = drinks.find(drink =>
+      category === 'Others'
+        ? !['Coffee', 'Tea'].includes(drink.category)
+        : drink.category === category
+    )
     if (firstDrink) {
       handleSelectDrink(firstDrink)
       return
@@ -512,7 +523,7 @@ export default function Home() {
     setEditingOrderId(order.id)
     setSelectedDrink(drink)
     setSelectedModifierIds(Array.isArray(order.modifier_ids) ? order.modifier_ids : defaultModifierIdsForDrink(drink))
-    setActiveCategory(drink.category)
+    setActiveCategory(['Coffee', 'Tea'].includes(drink.category) ? drink.category : 'Others')
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 

@@ -33,7 +33,7 @@ WITH ranked_modifiers AS (
   SELECT
     id,
     row_number() OVER (
-      PARTITION BY group_name, sort_order
+      PARTITION BY group_name, shortcode
       ORDER BY id DESC
     ) AS duplicate_rank
   FROM modifiers
@@ -43,8 +43,10 @@ WHERE id IN (
   SELECT id FROM ranked_modifiers WHERE duplicate_rank > 1
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS unique_modifier_group_sort_order
-  ON modifiers (group_name, sort_order);
+DROP INDEX IF EXISTS unique_modifier_group_sort_order;
+
+CREATE UNIQUE INDEX IF NOT EXISTS unique_modifier_group_shortcode
+  ON modifiers (group_name, shortcode);
 
 DO $$
 BEGIN
