@@ -90,6 +90,8 @@ export default function Home() {
   const [nameReady, setNameReady] = useState(false)
   const [activeCategory, setActiveCategory] = useState('')
   const [selectedDrink, setSelectedDrink] = useState<DrinkMenuItem | null>(null)
+  const [customOrderMode, setCustomOrderMode] = useState(false)
+  const [customOrderText, setCustomOrderText] = useState('')
   const [selectedModifierIds, setSelectedModifierIds] = useState<string[]>([])
   const [submitting, setSubmitting] = useState(false)
   const [checkingRound, setCheckingRound] = useState(false)
@@ -97,7 +99,7 @@ export default function Home() {
 
   const categories = CATEGORY_ORDER.filter(category => {
     if (category === 'Others') {
-      return drinks.some(drink => !['Coffee', 'Tea'].includes(drink.category))
+      return true
     }
     return drinks.some(drink => drink.category === category)
   })
@@ -153,6 +155,8 @@ export default function Home() {
     setSession(prev => {
       if (activeSession && prev?.id !== activeSession.id) {
         setSelectedDrink(null)
+        setCustomOrderMode(false)
+        setCustomOrderText('')
         setSelectedModifierIds([])
         setEditingOrderId(null)
       }
@@ -340,6 +344,8 @@ export default function Home() {
             setOrders([])
             setSession(null)
             setSelectedDrink(null)
+            setCustomOrderMode(false)
+            setCustomOrderText('')
             setSelectedModifierIds([])
             setEditingOrderId(null)
             toast('Round has been reset')
@@ -360,18 +366,30 @@ export default function Home() {
   }
 
   function handleSelectDrink(drink: DrinkMenuItem) {
+    setCustomOrderMode(false)
+    setCustomOrderText('')
     setSelectedDrink(drink)
     setSelectedModifierIds(defaultModifierIdsForDrink(drink))
+  }
+
+  function handleSelectCustomOrder() {
+    setSelectedDrink(null)
+    setSelectedModifierIds([])
+    setCustomOrderMode(true)
+    setEditingOrderId(null)
   }
 
   function handleSelectCategory(category: string) {
     setActiveCategory(category)
     setEditingOrderId(null)
 
+    if (category === 'Others') {
+      handleSelectCustomOrder()
+      return
+    }
+
     const firstDrink = drinks.find(drink =>
-      category === 'Others'
-        ? !['Coffee', 'Tea'].includes(drink.category)
-        : drink.category === category
+      drink.category === category
     )
     if (firstDrink) {
       handleSelectDrink(firstDrink)
@@ -379,6 +397,8 @@ export default function Home() {
     }
 
     setSelectedDrink(null)
+    setCustomOrderMode(false)
+    setCustomOrderText('')
     setSelectedModifierIds([])
   }
 
@@ -411,14 +431,24 @@ export default function Home() {
 
   function resetBuilder() {
     setSelectedDrink(null)
+    setCustomOrderMode(false)
+    setCustomOrderText('')
     setSelectedModifierIds([])
     setEditingOrderId(null)
   }
 
   async function handleSubmitOrder() {
-    if (!session || !personName.trim() || !selectedDrink || !deviceId) return
+    const customDescription = customOrderText.trim()
+    if (
+      !session ||
+      !personName.trim() ||
+      !deviceId ||
+      (!selectedDrink && (!customOrderMode || !customDescription))
+    ) return
 
-    const description = compiledDrink || selectedDrink.base_name
+    const description = customOrderMode
+      ? customDescription
+      : compiledDrink || selectedDrink?.base_name || ''
     setSubmitting(true)
 
     const payload = {
@@ -426,8 +456,8 @@ export default function Home() {
       drink_description: description,
       session_id: session.id,
       device_id: deviceId,
-      drink_id: selectedDrink.id,
-      modifier_ids: normalizedSelectedModifierIds,
+      drink_id: customOrderMode ? null : selectedDrink?.id ?? null,
+      modifier_ids: customOrderMode ? [] : normalizedSelectedModifierIds,
     }
 
     const { error } = editingOrderId
@@ -516,11 +546,19 @@ export default function Home() {
 
     const drink = drinks.find(item => item.id === order.drink_id)
     if (!drink) {
-      toast.error('This older order cannot be edited with the drink builder')
+      setEditingOrderId(order.id)
+      setActiveCategory('Others')
+      setSelectedDrink(null)
+      setSelectedModifierIds([])
+      setCustomOrderMode(true)
+      setCustomOrderText(order.drink_description)
+      window.scrollTo({ top: 0, behavior: 'smooth' })
       return
     }
 
     setEditingOrderId(order.id)
+    setCustomOrderMode(false)
+    setCustomOrderText('')
     setSelectedDrink(drink)
     setSelectedModifierIds(Array.isArray(order.modifier_ids) ? order.modifier_ids : defaultModifierIdsForDrink(drink))
     setActiveCategory(['Coffee', 'Tea'].includes(drink.category) ? drink.category : 'Others')
@@ -528,7 +566,12 @@ export default function Home() {
   }
 
   const canSubmit =
-    !submitting && nameReady && !!personName.trim() && !!deviceId && !!session?.is_active && !!selectedDrink
+    !submitting &&
+    nameReady &&
+    !!personName.trim() &&
+    !!deviceId &&
+    !!session?.is_active &&
+    (!!selectedDrink || (customOrderMode && !!customOrderText.trim()))
 
   return (
     <div className="min-h-screen bg-amber-50 pb-20">
@@ -651,21 +694,53 @@ export default function Home() {
               </div>
 
               {showDrinkCards && (
-                <div className="grid grid-cols-2 gap-2">
-                  {drinksInCategory.map(drink => (
-                    <button
-                      key={drink.id}
-                      type="button"
-                      onClick={() => handleSelectDrink(drink)}
-                      className={`min-h-[64px] rounded-xl border-2 p-3 text-sm font-medium text-left transition-colors ${
-                        selectedDrink?.id === drink.id
-                          ? 'border-amber-600 bg-amber-50 text-amber-900'
-                          : 'bg-white border-amber-100 text-amber-800'
-                      }`}
-                    >
-                      {drink.base_name}
-                    </button>
-                  ))}
+                <div className="space-y-3">
+                  <button
+                    type="button"
+                    onClick={handleSelectCustomOrder}
+                    className={`w-full rounded-lg border-2 px-4 py-3 text-left transition-colors ${
+                      customOrderMode
+                        ? 'border-amber-600 bg-amber-100 text-amber-950'
+                        : 'border-amber-300 bg-white text-amber-800'
+                    }`}
+                  >
+                    <span className="block text-sm font-bold">Custom order</span>
+                    <span className="block text-xs mt-0.5 text-amber-700">Type any drink you want</span>
+                  </button>
+
+                  {customOrderMode && (
+                    <div>
+                      <label htmlFor="custom-order" className="block text-xs font-semibold uppercase text-amber-700 mb-2">
+                        Your drink
+                      </label>
+                      <textarea
+                        id="custom-order"
+                        value={customOrderText}
+                        onChange={event => setCustomOrderText(event.target.value)}
+                        rows={2}
+                        maxLength={160}
+                        placeholder="e.g. Coke Zero, less ice"
+                        className="w-full resize-none rounded-lg border border-amber-300 bg-white px-3 py-2.5 text-base text-amber-950 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                      />
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-2 gap-2">
+                    {drinksInCategory.map(drink => (
+                      <button
+                        key={drink.id}
+                        type="button"
+                        onClick={() => handleSelectDrink(drink)}
+                        className={`min-h-[64px] rounded-lg border-2 p-3 text-sm font-medium text-left transition-colors ${
+                          selectedDrink?.id === drink.id
+                            ? 'border-amber-600 bg-amber-50 text-amber-900'
+                            : 'bg-white border-amber-100 text-amber-800'
+                        }`}
+                      >
+                        {drink.base_name}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
 
