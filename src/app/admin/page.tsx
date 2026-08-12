@@ -19,6 +19,8 @@ type Order = {
   created_at: string
 }
 
+type RoundStats = { orderCount: number; tableCount: number }
+
 type RoundsTab = 'session' | 'history'
 
 export default function RoundsPage() {
@@ -30,6 +32,9 @@ export default function RoundsPage() {
   const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null)
   const [expandedOrders, setExpandedOrders] = useState<Order[]>([])
   const [loadingExpanded, setLoadingExpanded] = useState(false)
+  const [roundStats, setRoundStats] = useState<Record<string, RoundStats>>({})
+  const [resumeCandidate, setResumeCandidate] = useState<OrderSession | null>(null)
+  const [resuming, setResuming] = useState(false)
 
   const loadRounds = useCallback(async () => {
     const { data: activeSession, error: sessionError } = await supabase
@@ -74,6 +79,21 @@ export default function RoundsPage() {
       toast.error(`Could not load history: ${historyError.message}`)
     } else {
       setPastSessions(history ?? [])
+
+      const historyIds = (history ?? []).map(round => round.id)
+      if (historyIds.length === 0) {
+        setRoundStats({})
+      } else {
+        const [{ data: historyOrders }, { data: historyTables }] = await Promise.all([
+          supabase.from('orders').select('session_id').in('session_id', historyIds),
+          supabase.from('order_tables').select('session_id').in('session_id', historyIds),
+        ])
+        const stats: Record<string, RoundStats> = {}
+        for (const id of historyIds) stats[id] = { orderCount: 0, tableCount: 0 }
+        for (const order of historyOrders ?? []) stats[order.session_id].orderCount += 1
+        for (const table of historyTables ?? []) stats[table.session_id].tableCount += 1
+        setRoundStats(stats)
+      }
     }
   }, [])
 
@@ -186,6 +206,39 @@ export default function RoundsPage() {
     }
 
     setLoadingExpanded(false)
+  }
+
+  async function resumeRound(round: OrderSession) {
+    setResuming(true)
+    try {
+      const { error: closeError } = await supabase
+        .from('order_sessions')
+        .update({ is_active: false, closed_at: new Date().toISOString() })
+        .eq('is_active', true)
+
+      if (closeError) {
+        toast.error(`Could not close the active round: ${closeError.message}`)
+        return
+      }
+
+      const { error: resumeError } = await supabase
+        .from('order_sessions')
+        .update({ is_active: true, closed_at: null })
+        .eq('id', round.id)
+
+      if (resumeError) {
+        toast.error(`Current round was closed, but could not resume this round: ${resumeError.message}`)
+        await loadRounds()
+        return
+      }
+
+      setResumeCandidate(null)
+      setActiveTab('session')
+      await loadRounds()
+      toast.success('Past round resumed')
+    } finally {
+      setResuming(false)
+    }
   }
 
   function formatDateTime(iso: string) {
@@ -307,6 +360,9 @@ export default function RoundsPage() {
                             Closed {formatDateTime(round.closed_at)}
                           </p>
                         )}
+                        <p className="text-xs text-stone-500 mt-1">
+                          {roundStats[round.id]?.orderCount ?? 0} order{roundStats[round.id]?.orderCount === 1 ? '' : 's'} · {roundStats[round.id]?.tableCount ?? 0} table{roundStats[round.id]?.tableCount === 1 ? '' : 's'}
+                        </p>
                       </div>
                       <span className="text-stone-400 text-xs ml-3">
                         {expandedSessionId === round.id ? '▲' : '▼'}
@@ -315,6 +371,13 @@ export default function RoundsPage() {
 
                     {expandedSessionId === round.id && (
                       <div className="border-t border-stone-100 px-4 py-3">
+                        <button
+                          type="button"
+                          onClick={() => setResumeCandidate(round)}
+                          className="mb-3 w-full rounded-lg border border-amber-300 bg-amber-50 py-2 text-xs font-semibold text-amber-800"
+                        >
+                          Resume this round
+                        </button>
                         {loadingExpanded ? (
                           <p className="text-sm text-stone-400 py-2">Loading...</p>
                         ) : expandedOrders.length === 0 ? (
@@ -338,6 +401,24 @@ export default function RoundsPage() {
                 ))}
               </div>
             )}
+          </div>
+        )}
+
+        {resumeCandidate && (
+          <div className="fixed inset-0 z-50 flex items-end bg-black/40 p-4 sm:items-center sm:justify-center">
+            <div className="w-full max-w-sm rounded-lg bg-white p-5 shadow-xl">
+              <h2 className="text-base font-bold text-stone-900">Resume this past round?</h2>
+              <p className="mt-2 text-sm text-stone-600">
+                {session
+                  ? 'The current active round will be closed and archived. The selected past round will reopen with all of its existing orders and tables.'
+                  : 'The selected past round will reopen with all of its existing orders and tables.'}
+              </p>
+              <p className="mt-2 text-xs text-stone-500">Started {formatDateTime(resumeCandidate.created_at)}</p>
+              <div className="mt-5 flex gap-2">
+                <button type="button" onClick={() => setResumeCandidate(null)} disabled={resuming} className="flex-1 rounded-lg border border-stone-300 py-2.5 text-sm font-semibold text-stone-700">Cancel</button>
+                <button type="button" onClick={() => resumeRound(resumeCandidate)} disabled={resuming} className="flex-1 rounded-lg bg-amber-700 py-2.5 text-sm font-semibold text-white disabled:opacity-50">{resuming ? 'Resuming...' : 'Close & Resume'}</button>
+              </div>
+            </div>
           </div>
         )}
       </main>

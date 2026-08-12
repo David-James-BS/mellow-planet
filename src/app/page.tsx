@@ -36,6 +36,25 @@ type Order = {
   device_id: string | null
   drink_id: string | null
   modifier_ids: string[] | null
+  table_id: string | null
+}
+
+type OrderTable = {
+  id: string
+  session_id: string
+  name: string
+  created_by_device_id: string
+  created_by_name: string
+  created_at: string
+}
+
+type TableMembership = {
+  id: string
+  session_id: string
+  table_id: string
+  device_id: string
+  person_name: string
+  created_at: string
 }
 
 const CATEGORY_ORDER = ['Coffee', 'Tea', 'Others']
@@ -83,6 +102,14 @@ export default function Home() {
   const [drinks, setDrinks] = useState<DrinkMenuItem[]>([])
   const [modifiersByGroup, setModifiersByGroup] = useState<Record<string, Modifier[]>>({})
   const [orders, setOrders] = useState<Order[]>([])
+  const [tables, setTables] = useState<OrderTable[]>([])
+  const [memberships, setMemberships] = useState<TableMembership[]>([])
+  const [selectedTableId, setSelectedTableId] = useState<string | null>(null)
+  const [renamingTableId, setRenamingTableId] = useState<string | null>(null)
+  const [tableNameDraft, setTableNameDraft] = useState('')
+  const [tableActionPending, setTableActionPending] = useState(false)
+  const [confirmDeleteTableId, setConfirmDeleteTableId] = useState<string | null>(null)
+  const [selectedUnassignedOrderIds, setSelectedUnassignedOrderIds] = useState<string[]>([])
   const [lastOrder, setLastOrder] = useState<Order | null>(null)
   const [loading, setLoading] = useState(true)
   const [deviceId, setDeviceId] = useState('')
@@ -110,6 +137,11 @@ export default function Home() {
       : drink.category === activeCategory
   )
   const showDrinkCards = !['Coffee', 'Tea'].includes(activeCategory)
+  const selectedTable = tables.find(table => table.id === selectedTableId) ?? null
+  const myMembership = memberships.find(membership => membership.device_id === deviceId) ?? null
+  const isMemberOfSelectedTable = !!selectedTable && myMembership?.table_id === selectedTable.id
+  const movableOrders = selectedTable ? orders.filter(order => order.table_id !== selectedTable.id) : []
+  const orderTableId = myMembership?.table_id === selectedTableId ? selectedTableId : null
 
   const selectedModifierIdsByGroup = orderedGroups(selectedDrink?.available_modifiers ?? [])
     .reduce<Record<string, string | undefined>>((selected, group) => {
@@ -136,6 +168,21 @@ export default function Home() {
     .filter(Boolean)
     .join(' ')
 
+  const loadTableData = useCallback(async (sessionId: string) => {
+    const [{ data: tableData, error: tablesError }, { data: membershipData, error: membershipsError }] = await Promise.all([
+      supabase.from('order_tables').select('*').eq('session_id', sessionId).order('created_at', { ascending: true }),
+      supabase.from('table_memberships').select('*').eq('session_id', sessionId).order('created_at', { ascending: true }),
+    ])
+
+    if (tablesError || membershipsError) {
+      toast.error(`Could not load tables: ${(tablesError ?? membershipsError)?.message}`)
+      return
+    }
+
+    setTables((tableData ?? []) as OrderTable[])
+    setMemberships((membershipData ?? []) as TableMembership[])
+  }, [])
+
   const loadActiveSession = useCallback(async () => {
     const { data: activeSession, error: sessionError } = await supabase
       .from('order_sessions')
@@ -149,6 +196,8 @@ export default function Home() {
       toast.error(`Could not load active round: ${sessionError.message}`)
       setSession(null)
       setOrders([])
+      setTables([])
+      setMemberships([])
       return null
     }
 
@@ -159,12 +208,16 @@ export default function Home() {
         setCustomOrderText('')
         setSelectedModifierIds([])
         setEditingOrderId(null)
+        setSelectedTableId(null)
+        setSelectedUnassignedOrderIds([])
       }
       return activeSession ?? null
     })
 
     if (!activeSession) {
       setOrders([])
+      setTables([])
+      setMemberships([])
       return null
     }
 
@@ -181,8 +234,9 @@ export default function Home() {
     }
 
     setOrders((orderData ?? []) as Order[])
+    await loadTableData(activeSession.id)
     return activeSession
-  }, [])
+  }, [loadTableData])
 
   const loadLastOrder = useCallback(async (currentDeviceId: string) => {
     if (!currentDeviceId) {
@@ -297,12 +351,9 @@ export default function Home() {
       .channel('session-watcher')
       .on(
         'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'order_sessions' },
-        async payload => {
-          const newSession = payload.new as OrderSession
-          if (!newSession.is_active) return
+        { event: '*', schema: 'public', table: 'order_sessions' },
+        async () => {
           await loadActiveSession()
-          toast('New round started')
         }
       )
       .subscribe()
@@ -342,6 +393,8 @@ export default function Home() {
         async payload => {
           if (!(payload.new as OrderSession).is_active) {
             setOrders([])
+            setTables([])
+            setMemberships([])
             setSession(null)
             setSelectedDrink(null)
             setCustomOrderMode(false)
@@ -353,10 +406,20 @@ export default function Home() {
           }
         }
       )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'order_tables', filter: `session_id=eq.${session.id}` },
+        () => { loadTableData(session.id) }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'table_memberships', filter: `session_id=eq.${session.id}` },
+        () => { loadTableData(session.id) }
+      )
       .subscribe()
 
     return () => { supabase.removeChannel(channel) }
-  }, [loadActiveSession, session])
+  }, [loadActiveSession, loadTableData, session])
 
   function defaultModifierIdsForDrink(drink: DrinkMenuItem) {
     return orderedGroups(drink.available_modifiers).flatMap(group => {
@@ -437,6 +500,202 @@ export default function Home() {
     setEditingOrderId(null)
   }
 
+  async function startTable() {
+    if (!session || !deviceId || !personName.trim()) return
+
+    setTableActionPending(true)
+    const name = `${personName.trim()}'s table`
+    const { data: table, error: tableError } = await supabase
+      .from('order_tables')
+      .insert({
+        session_id: session.id,
+        name,
+        created_by_device_id: deviceId,
+        created_by_name: personName.trim(),
+      })
+      .select()
+      .single()
+
+    if (tableError || !table) {
+      setTableActionPending(false)
+      toast.error(`Could not start table: ${tableError?.message ?? 'No table returned'}`)
+      return
+    }
+
+    if (myMembership) {
+      const { error } = await supabase
+        .from('table_memberships')
+        .delete()
+        .eq('session_id', session.id)
+        .eq('device_id', deviceId)
+      if (error) {
+        setTableActionPending(false)
+        toast.error(`Table started, but could not leave your old table: ${error.message}`)
+        return
+      }
+    }
+
+    const { error: membershipError } = await supabase
+      .from('table_memberships')
+      .insert({ session_id: session.id, table_id: table.id, device_id: deviceId, person_name: personName.trim() })
+
+    setTableActionPending(false)
+    if (membershipError) {
+      toast.error(`Table started, but could not join it: ${membershipError.message}`)
+      await loadTableData(session.id)
+      return
+    }
+
+    setSelectedTableId(table.id)
+    await loadTableData(session.id)
+    toast.success(`${name} started`)
+  }
+
+  async function joinTable(table: OrderTable) {
+    if (!session || !deviceId || !personName.trim()) return
+
+    setTableActionPending(true)
+    const { error: leaveError } = await supabase
+      .from('table_memberships')
+      .delete()
+      .eq('session_id', session.id)
+      .eq('device_id', deviceId)
+
+    if (leaveError) {
+      setTableActionPending(false)
+      toast.error(`Could not change table: ${leaveError.message}`)
+      return
+    }
+
+    const { error: joinError } = await supabase
+      .from('table_memberships')
+      .insert({ session_id: session.id, table_id: table.id, device_id: deviceId, person_name: personName.trim() })
+
+    if (joinError) {
+      setTableActionPending(false)
+      toast.error(`Could not join table: ${joinError.message}`)
+      return
+    }
+
+    const { error: moveError } = await supabase
+      .from('orders')
+      .update({ table_id: table.id })
+      .eq('session_id', session.id)
+      .eq('device_id', deviceId)
+      .is('table_id', null)
+
+    setTableActionPending(false)
+    if (moveError) {
+      toast.error(`Joined table, but could not move your unassigned orders: ${moveError.message}`)
+    } else {
+      toast.success(`Joined ${table.name}`)
+    }
+    setSelectedTableId(table.id)
+    await loadActiveSession()
+  }
+
+  async function leaveTable() {
+    if (!session || !deviceId || !myMembership) return
+    setTableActionPending(true)
+    const { error } = await supabase
+      .from('table_memberships')
+      .delete()
+      .eq('id', myMembership.id)
+    setTableActionPending(false)
+    if (error) {
+      toast.error(`Could not leave table: ${error.message}`)
+      return
+    }
+    toast('You left the table. Your existing orders stay where they are.')
+    await loadTableData(session.id)
+  }
+
+  async function renameTable() {
+    if (!selectedTable || !isMemberOfSelectedTable || !tableNameDraft.trim()) return
+    setTableActionPending(true)
+    const { error } = await supabase
+      .from('order_tables')
+      .update({ name: tableNameDraft.trim() })
+      .eq('id', selectedTable.id)
+    setTableActionPending(false)
+    if (error) {
+      toast.error(`Could not rename table: ${error.message}`)
+      return
+    }
+    setRenamingTableId(null)
+    toast.success('Table renamed')
+  }
+
+  async function addOrderOwnersToSelectedTable(orderIds: string[]) {
+    if (!session || !selectedTable || !isMemberOfSelectedTable) return true
+
+    const owners = Array.from(new Map(
+      orders
+        .filter(order => orderIds.includes(order.id) && order.device_id)
+        .map(order => [order.device_id as string, order.person_name])
+    ))
+
+    for (const [ownerDeviceId, ownerName] of owners) {
+      const { error: leaveError } = await supabase
+        .from('table_memberships')
+        .delete()
+        .eq('session_id', session.id)
+        .eq('device_id', ownerDeviceId)
+
+      if (leaveError) {
+        toast.error(`Could not move ${ownerName} into this table: ${leaveError.message}`)
+        return false
+      }
+
+      const { error: joinError } = await supabase
+        .from('table_memberships')
+        .insert({ session_id: session.id, table_id: selectedTable.id, device_id: ownerDeviceId, person_name: ownerName })
+
+      if (joinError) {
+        toast.error(`Could not add ${ownerName} to this table: ${joinError.message}`)
+        return false
+      }
+    }
+
+    return true
+  }
+
+  async function moveOrdersToSelectedTable(orderIds: string[]) {
+    if (!selectedTable || !isMemberOfSelectedTable || orderIds.length === 0) return
+    setTableActionPending(true)
+    const ownersAdded = await addOrderOwnersToSelectedTable(orderIds)
+    if (!ownersAdded) {
+      setTableActionPending(false)
+      return
+    }
+    const { error } = await supabase
+      .from('orders')
+      .update({ table_id: selectedTable.id })
+      .in('id', orderIds)
+    setTableActionPending(false)
+    if (error) {
+      toast.error(`Could not move orders: ${error.message}`)
+      return
+    }
+    setSelectedUnassignedOrderIds([])
+    toast.success(`${orderIds.length} order${orderIds.length === 1 ? '' : 's'} moved and people added to the table`)
+    await loadActiveSession()
+  }
+
+  async function deleteTable(table: OrderTable) {
+    setTableActionPending(true)
+    const { error } = await supabase.from('order_tables').delete().eq('id', table.id)
+    setTableActionPending(false)
+    if (error) {
+      toast.error(`Could not delete table: ${error.message}`)
+      return
+    }
+    setConfirmDeleteTableId(null)
+    if (selectedTableId === table.id) setSelectedTableId(null)
+    toast('Table deleted. Its orders are now unassigned.')
+    await loadActiveSession()
+  }
+
   async function handleSubmitOrder() {
     const customDescription = customOrderText.trim()
     if (
@@ -458,6 +717,7 @@ export default function Home() {
       device_id: deviceId,
       drink_id: customOrderMode ? null : selectedDrink?.id ?? null,
       modifier_ids: customOrderMode ? [] : normalizedSelectedModifierIds,
+      table_id: orderTableId,
     }
 
     const { error } = editingOrderId
@@ -480,6 +740,7 @@ export default function Home() {
       device_id: payload.device_id,
       drink_id: payload.drink_id,
       modifier_ids: payload.modifier_ids,
+      table_id: payload.table_id,
     })
     resetBuilder()
     toast.success(editingOrderId ? 'Order updated' : 'Order added')
@@ -496,6 +757,7 @@ export default function Home() {
       device_id: deviceId,
       drink_id: lastOrder.drink_id,
       modifier_ids: Array.isArray(lastOrder.modifier_ids) ? lastOrder.modifier_ids : [],
+      table_id: orderTableId,
     }
 
     const { data, error } = await supabase
@@ -520,6 +782,7 @@ export default function Home() {
       device_id: payload.device_id,
       drink_id: payload.drink_id,
       modifier_ids: payload.modifier_ids,
+      table_id: payload.table_id,
     })
     toast.success('Order added')
   }
@@ -652,6 +915,158 @@ export default function Home() {
                   {sessionLabel(session.created_at)}
                 </p>
               </div>
+            )}
+
+            {session?.is_active && nameReady && (
+              <section className="space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-bold text-amber-900">Tables</h3>
+                    <p className="text-xs text-amber-600 mt-0.5">Optional. Orders can stay unassigned.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={startTable}
+                    disabled={tableActionPending}
+                    className="rounded-lg bg-amber-700 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
+                  >
+                    Start my table
+                  </button>
+                </div>
+
+                {tables.length === 0 ? (
+                  <p className="rounded-lg border border-dashed border-amber-200 bg-white px-3 py-3 text-sm text-amber-600">
+                    No tables yet. Start one or place an unassigned order.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {tables.map(table => {
+                      const memberCount = memberships.filter(membership => membership.table_id === table.id).length
+                      const tableOrderCount = orders.filter(order => order.table_id === table.id).length
+                      const isSelected = selectedTableId === table.id
+                      const isMine = myMembership?.table_id === table.id
+                      return (
+                        <div
+                          key={table.id}
+                          className={`rounded-lg border px-3 py-3 ${isSelected ? 'border-amber-500 bg-amber-100' : 'border-amber-100 bg-white'}`}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <button type="button" onClick={() => setSelectedTableId(table.id)} className="min-w-0 flex-1 text-left">
+                              <p className="truncate text-sm font-bold text-amber-950">{table.name}</p>
+                              <p className="mt-0.5 text-xs text-amber-700">
+                                {memberCount} member{memberCount === 1 ? '' : 's'} · {tableOrderCount} order{tableOrderCount === 1 ? '' : 's'}
+                              </p>
+                            </button>
+                            {isMine ? (
+                              <button
+                                type="button"
+                                onClick={leaveTable}
+                                disabled={tableActionPending}
+                                className="shrink-0 rounded-lg border border-amber-300 px-2.5 py-1.5 text-xs font-semibold text-amber-700 disabled:opacity-50"
+                              >
+                                Leave
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => joinTable(table)}
+                                disabled={tableActionPending}
+                                className="shrink-0 rounded-lg bg-amber-700 px-2.5 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                              >
+                                Join
+                              </button>
+                            )}
+                          </div>
+
+                          {isSelected && isMine && (
+                            <div className="mt-3 space-y-3 border-t border-amber-200 pt-3">
+                              {renamingTableId === table.id ? (
+                                <div className="flex gap-2">
+                                  <input
+                                    type="text"
+                                    value={tableNameDraft}
+                                    onChange={event => setTableNameDraft(event.target.value)}
+                                    maxLength={60}
+                                    className="min-w-0 flex-1 rounded-lg border border-amber-300 bg-white px-2.5 py-2 text-sm text-amber-950 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                                  />
+                                  <button type="button" onClick={renameTable} disabled={!tableNameDraft.trim() || tableActionPending} className="rounded-lg bg-amber-700 px-3 text-xs font-semibold text-white disabled:opacity-50">Save</button>
+                                  <button type="button" onClick={() => setRenamingTableId(null)} className="rounded-lg border border-amber-300 px-2 text-xs text-amber-700">Cancel</button>
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => { setRenamingTableId(table.id); setTableNameDraft(table.name) }}
+                                  className="text-xs font-semibold text-amber-700"
+                                >
+                                  Rename table
+                                </button>
+                              )}
+
+                              {movableOrders.length > 0 && (
+                                <div className="space-y-2">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <p className="text-xs font-semibold uppercase text-amber-700">Add people or move orders</p>
+                                  </div>
+                                  {Object.values(movableOrders.reduce<Record<string, { name: string; orderIds: string[] }>>((people, order) => {
+                                    const key = order.device_id ?? `legacy:${order.person_name}`
+                                    if (!people[key]) people[key] = { name: order.person_name, orderIds: [] }
+                                    people[key].orderIds.push(order.id)
+                                    return people
+                                  }, {})).map(person => (
+                                    <div key={`${person.name}-${person.orderIds[0]}`} className="flex items-center justify-between gap-2 rounded-lg bg-white px-2.5 py-2">
+                                      <span className="min-w-0 truncate text-xs text-amber-900"><strong>{person.name}</strong> · {person.orderIds.length} order{person.orderIds.length === 1 ? '' : 's'}</span>
+                                      <button
+                                        type="button"
+                                        onClick={() => moveOrdersToSelectedTable(person.orderIds)}
+                                        disabled={tableActionPending}
+                                        className="shrink-0 text-xs font-semibold text-amber-700 disabled:opacity-50"
+                                      >
+                                        Add & move all
+                                      </button>
+                                    </div>
+                                  ))}
+                                  {movableOrders.map(order => (
+                                    <label key={order.id} className="flex items-center gap-2 rounded-lg bg-white px-2.5 py-2 text-xs text-amber-900">
+                                      <input
+                                        type="checkbox"
+                                        checked={selectedUnassignedOrderIds.includes(order.id)}
+                                        onChange={() => setSelectedUnassignedOrderIds(prev => prev.includes(order.id) ? prev.filter(id => id !== order.id) : [...prev, order.id])}
+                                      />
+                                      <span className="min-w-0 flex-1 truncate"><strong>{order.person_name}</strong> · {order.drink_description}</span>
+                                    </label>
+                                  ))}
+                                  {selectedUnassignedOrderIds.length > 0 && (
+                                    <button
+                                      type="button"
+                                      onClick={() => moveOrdersToSelectedTable(selectedUnassignedOrderIds)}
+                                      disabled={tableActionPending}
+                                      className="w-full rounded-lg border border-amber-300 bg-white py-2 text-xs font-semibold text-amber-800 disabled:opacity-50"
+                                    >
+                                      Move selected ({selectedUnassignedOrderIds.length})
+                                    </button>
+                                  )}
+                                </div>
+                              )}
+
+                              {confirmDeleteTableId === table.id ? (
+                                <div className="flex items-center justify-between gap-2 rounded-lg bg-red-50 px-2.5 py-2">
+                                  <p className="text-xs text-red-700">Delete this table? Its {tableOrderCount} order{tableOrderCount === 1 ? '' : 's'} will become unassigned.</p>
+                                  <div className="flex gap-2 shrink-0">
+                                    <button type="button" onClick={() => setConfirmDeleteTableId(null)} className="text-xs text-amber-700">Cancel</button>
+                                    <button type="button" onClick={() => deleteTable(table)} disabled={tableActionPending} className="text-xs font-semibold text-red-700 disabled:opacity-50">Delete</button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <button type="button" onClick={() => setConfirmDeleteTableId(table.id)} className="text-xs text-red-600">Delete table</button>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </section>
             )}
 
             {session?.is_active && nameReady && lastOrder?.drink_description && (
@@ -839,7 +1254,23 @@ export default function Home() {
               </p>
             ) : (
               <div className="space-y-2">
-                {orders.map(order => {
+                {[...tables.map(table => ({
+                  id: table.id,
+                  name: table.name,
+                  orders: orders.filter(order => order.table_id === table.id),
+                })), {
+                  id: 'unassigned',
+                  name: 'No table yet',
+                  orders: orders.filter(order => !order.table_id),
+                }]
+                  .filter(group => group.orders.length > 0)
+                  .map(group => (
+                    <div key={group.id} className="space-y-2">
+                      <div className="flex items-center justify-between px-1">
+                        <h3 className="text-xs font-bold uppercase tracking-wide text-amber-700">{group.name}</h3>
+                        <span className="text-xs text-amber-500">{group.orders.length}</span>
+                      </div>
+                      {group.orders.map(order => {
                   const isMine = !!deviceId && order.device_id === deviceId
                   return (
                     <div
@@ -877,7 +1308,9 @@ export default function Home() {
                       )}
                     </div>
                   )
-                })}
+                      })}
+                    </div>
+                  ))}
               </div>
             )}
           </section>
