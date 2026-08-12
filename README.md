@@ -47,6 +47,7 @@ Open [http://localhost:3000](http://localhost:3000).
    - `supabase/migrations/005_cleanup_duplicate_modifiers.sql`
    - `supabase/migrations/006_restore_standard_modifiers.sql`
    - `supabase/migrations/007_session_tables_and_resume.sql`
+   - `supabase/migrations/008_remove_empty_tables.sql`
 3. Run `supabase/seed.sql` to populate drinks, modifiers, and a default session
 4. Copy your **Project URL** and **anon public key** from **Project Settings → API** into `.env.local`
 
@@ -60,6 +61,10 @@ restores any standard choices removed by the earlier cleanup. Then rerun
 To add tables and resume past rounds to an existing database, also run
 `007_session_tables_and_resume.sql`. Existing orders remain unassigned until a
 person joins a table or a current table member moves them.
+
+If tables were used before the latest leave-table behavior, run
+`008_remove_empty_tables.sql` once to remove any empty tables while keeping
+their orders unassigned.
 
 ## Vercel deployment
 

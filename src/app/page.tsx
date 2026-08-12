@@ -523,14 +523,10 @@ export default function Home() {
     }
 
     if (myMembership) {
-      const { error } = await supabase
-        .from('table_memberships')
-        .delete()
-        .eq('session_id', session.id)
-        .eq('device_id', deviceId)
-      if (error) {
+      const left = await removeMembershipAndDestroyEmpty(myMembership)
+      if (!left) {
         setTableActionPending(false)
-        toast.error(`Table started, but could not leave your old table: ${error.message}`)
+        await supabase.from('order_tables').delete().eq('id', table.id)
         return
       }
     }
@@ -555,15 +551,8 @@ export default function Home() {
     if (!session || !deviceId || !personName.trim()) return
 
     setTableActionPending(true)
-    const { error: leaveError } = await supabase
-      .from('table_memberships')
-      .delete()
-      .eq('session_id', session.id)
-      .eq('device_id', deviceId)
-
-    if (leaveError) {
+    if (myMembership && !(await removeMembershipAndDestroyEmpty(myMembership))) {
       setTableActionPending(false)
-      toast.error(`Could not change table: ${leaveError.message}`)
       return
     }
 
@@ -597,17 +586,65 @@ export default function Home() {
   async function leaveTable() {
     if (!session || !deviceId || !myMembership) return
     setTableActionPending(true)
-    const { error } = await supabase
-      .from('table_memberships')
-      .delete()
-      .eq('id', myMembership.id)
-    setTableActionPending(false)
-    if (error) {
-      toast.error(`Could not leave table: ${error.message}`)
+    const tableId = myMembership.table_id
+    const { error: ordersError } = await supabase
+      .from('orders')
+      .update({ table_id: null })
+      .eq('session_id', session.id)
+      .eq('device_id', deviceId)
+      .eq('table_id', tableId)
+
+    if (ordersError) {
+      setTableActionPending(false)
+      toast.error(`Could not unassign your orders: ${ordersError.message}`)
       return
     }
-    toast('You left the table. Your existing orders stay where they are.')
-    await loadTableData(session.id)
+
+    const left = await removeMembershipAndDestroyEmpty(myMembership)
+    setTableActionPending(false)
+    if (!left) {
+      return
+    }
+    if (selectedTableId === tableId) setSelectedTableId(null)
+    toast('You left the table. Your orders are now unassigned.')
+    await loadActiveSession()
+  }
+
+  async function removeMembershipAndDestroyEmpty(membership: TableMembership) {
+    const { error: leaveError } = await supabase
+      .from('table_memberships')
+      .delete()
+      .eq('id', membership.id)
+
+    if (leaveError) {
+      toast.error(`Could not leave table: ${leaveError.message}`)
+      return false
+    }
+
+    const { data: remainingMembers, error: membersError } = await supabase
+      .from('table_memberships')
+      .select('id')
+      .eq('table_id', membership.table_id)
+      .limit(1)
+
+    if (membersError) {
+      toast.error(`Left table, but could not check its members: ${membersError.message}`)
+      return false
+    }
+
+    if ((remainingMembers ?? []).length === 0) {
+      const { error: deleteError } = await supabase
+        .from('order_tables')
+        .delete()
+        .eq('id', membership.table_id)
+
+      if (deleteError) {
+        toast.error(`Left table, but could not remove the empty table: ${deleteError.message}`)
+        return false
+      }
+    }
+
+    return true
   }
 
   async function renameTable() {
@@ -636,16 +673,24 @@ export default function Home() {
     ))
 
     for (const [ownerDeviceId, ownerName] of owners) {
-      const { error: leaveError } = await supabase
+      const { data: oldMembership, error: oldMembershipError } = await supabase
         .from('table_memberships')
-        .delete()
+        .select('*')
         .eq('session_id', session.id)
         .eq('device_id', ownerDeviceId)
+        .maybeSingle()
 
-      if (leaveError) {
-        toast.error(`Could not move ${ownerName} into this table: ${leaveError.message}`)
+      if (oldMembershipError) {
+        toast.error(`Could not check ${ownerName}'s current table: ${oldMembershipError.message}`)
         return false
       }
+
+      if (oldMembership && oldMembership.table_id !== selectedTable.id && !(await removeMembershipAndDestroyEmpty(oldMembership as TableMembership))) {
+        toast.error(`Could not move ${ownerName} into this table`)
+        return false
+      }
+
+      if (oldMembership?.table_id === selectedTable.id) continue
 
       const { error: joinError } = await supabase
         .from('table_memberships')
