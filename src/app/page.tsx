@@ -97,6 +97,14 @@ function getStoredDeviceId() {
   return next
 }
 
+function drinkKind(order: Order, drinks: DrinkMenuItem[]) {
+  const baseName = drinks.find(drink => drink.id === order.drink_id)?.base_name ?? order.drink_description
+  const normalized = baseName.trim().toLowerCase()
+  if (normalized.startsWith('kopi')) return 0
+  if (normalized.startsWith('teh')) return 1
+  return 2
+}
+
 export default function Home() {
   const [session, setSession] = useState<OrderSession | null>(null)
   const [drinks, setDrinks] = useState<DrinkMenuItem[]>([])
@@ -142,6 +150,25 @@ export default function Home() {
   const isMemberOfSelectedTable = !!selectedTable && myMembership?.table_id === selectedTable.id
   const movableOrders = selectedTable ? orders.filter(order => order.table_id !== selectedTable.id) : []
   const orderTableId = myMembership?.table_id === selectedTableId ? selectedTableId : null
+  const coldModifierIds = new Set(
+    (modifiersByGroup.temperature ?? [])
+      .filter(modifier => modifier.shortcode.toLowerCase() === 'peng')
+      .map(modifier => modifier.id)
+  )
+
+  function sortOrdersForPickup(orderList: Order[]) {
+    return [...orderList].sort((a, b) => {
+      const aIsCold = (a.modifier_ids ?? []).some(id => coldModifierIds.has(id)) || /\bpeng\b/i.test(a.drink_description)
+      const bIsCold = (b.modifier_ids ?? []).some(id => coldModifierIds.has(id)) || /\bpeng\b/i.test(b.drink_description)
+      const temperatureOrder = Number(aIsCold) - Number(bIsCold)
+      if (temperatureOrder !== 0) return temperatureOrder
+
+      const kindOrder = drinkKind(a, drinks) - drinkKind(b, drinks)
+      if (kindOrder !== 0) return kindOrder
+
+      return a.created_at.localeCompare(b.created_at)
+    })
+  }
 
   const selectedModifierIdsByGroup = orderedGroups(selectedDrink?.available_modifiers ?? [])
     .reduce<Record<string, string | undefined>>((selected, group) => {
@@ -1315,7 +1342,7 @@ export default function Home() {
                         <h3 className="text-xs font-bold uppercase tracking-wide text-amber-700">{group.name}</h3>
                         <span className="text-xs text-amber-500">{group.orders.length}</span>
                       </div>
-                      {group.orders.map(order => {
+                      {sortOrdersForPickup(group.orders).map(order => {
                   const isMine = !!deviceId && order.device_id === deviceId
                   return (
                     <div
