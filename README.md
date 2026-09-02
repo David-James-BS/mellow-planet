@@ -48,6 +48,7 @@ Open [http://localhost:3000](http://localhost:3000).
    - `supabase/migrations/006_restore_standard_modifiers.sql`
    - `supabase/migrations/007_session_tables_and_resume.sql`
    - `supabase/migrations/008_remove_empty_tables.sql`
+   - `supabase/migrations/009_table_integrity_and_atomic_actions.sql`
 3. Run `supabase/seed.sql` to populate drinks, modifiers, and a default session
 4. Copy your **Project URL** and **anon public key** from **Project Settings → API** into `.env.local`
 
@@ -65,6 +66,10 @@ person joins a table or a current table member moves them.
 If tables were used before the latest leave-table behavior, run
 `008_remove_empty_tables.sql` once to remove any empty tables while keeping
 their orders unassigned.
+
+Run `009_table_integrity_and_atomic_actions.sql` before deploying the latest
+table UI. It validates that orders and tables belong to the same session and
+makes join, leave, moving orders, and resuming a round atomic.
 
 ## Vercel deployment
 

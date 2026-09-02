@@ -116,6 +116,7 @@ export default function Home() {
   const [renamingTableId, setRenamingTableId] = useState<string | null>(null)
   const [tableNameDraft, setTableNameDraft] = useState('')
   const [tableActionPending, setTableActionPending] = useState(false)
+  const [tableManagementOpen, setTableManagementOpen] = useState(false)
   const [confirmDeleteTableId, setConfirmDeleteTableId] = useState<string | null>(null)
   const [selectedUnassignedOrderIds, setSelectedUnassignedOrderIds] = useState<string[]>([])
   const [lastOrder, setLastOrder] = useState<Order | null>(null)
@@ -182,6 +183,12 @@ export default function Home() {
       const selectedId = selectedModifierIdsByGroup[group]
       return selectedId ? [selectedId] : []
     })
+
+  useEffect(() => {
+    if (myMembership && selectedTableId !== myMembership.table_id) {
+      setSelectedTableId(myMembership.table_id)
+    }
+  }, [myMembership, selectedTableId])
 
   const compiledDrink = [
     selectedDrink?.base_name,
@@ -532,44 +539,19 @@ export default function Home() {
 
     setTableActionPending(true)
     const name = `${personName.trim()}'s table`
-    const { data: table, error: tableError } = await supabase
-      .from('order_tables')
-      .insert({
-        session_id: session.id,
-        name,
-        created_by_device_id: deviceId,
-        created_by_name: personName.trim(),
-      })
-      .select()
-      .single()
-
-    if (tableError || !table) {
-      setTableActionPending(false)
-      toast.error(`Could not start table: ${tableError?.message ?? 'No table returned'}`)
-      return
-    }
-
-    if (myMembership) {
-      const left = await removeMembershipAndDestroyEmpty(myMembership)
-      if (!left) {
-        setTableActionPending(false)
-        await supabase.from('order_tables').delete().eq('id', table.id)
-        return
-      }
-    }
-
-    const { error: membershipError } = await supabase
-      .from('table_memberships')
-      .insert({ session_id: session.id, table_id: table.id, device_id: deviceId, person_name: personName.trim() })
-
+    const { data: tableId, error } = await supabase.rpc('create_and_join_order_table', {
+      p_session_id: session.id,
+      p_device_id: deviceId,
+      p_person_name: personName.trim(),
+    })
     setTableActionPending(false)
-    if (membershipError) {
-      toast.error(`Table started, but could not join it: ${membershipError.message}`)
-      await loadTableData(session.id)
+    if (error || !tableId) {
+      toast.error(`Could not start table: ${error?.message ?? 'No table returned'}`)
       return
     }
 
-    setSelectedTableId(table.id)
+    setSelectedTableId(tableId as string)
+    setTableManagementOpen(false)
     await loadTableData(session.id)
     toast.success(`${name} started`)
   }
@@ -578,35 +560,20 @@ export default function Home() {
     if (!session || !deviceId || !personName.trim()) return
 
     setTableActionPending(true)
-    if (myMembership && !(await removeMembershipAndDestroyEmpty(myMembership))) {
-      setTableActionPending(false)
-      return
-    }
-
-    const { error: joinError } = await supabase
-      .from('table_memberships')
-      .insert({ session_id: session.id, table_id: table.id, device_id: deviceId, person_name: personName.trim() })
-
-    if (joinError) {
-      setTableActionPending(false)
-      toast.error(`Could not join table: ${joinError.message}`)
-      return
-    }
-
-    const { error: moveError } = await supabase
-      .from('orders')
-      .update({ table_id: table.id })
-      .eq('session_id', session.id)
-      .eq('device_id', deviceId)
-      .is('table_id', null)
-
+    const { error } = await supabase.rpc('join_order_table', {
+      p_session_id: session.id,
+      p_table_id: table.id,
+      p_device_id: deviceId,
+      p_person_name: personName.trim(),
+    })
     setTableActionPending(false)
-    if (moveError) {
-      toast.error(`Joined table, but could not move your unassigned orders: ${moveError.message}`)
-    } else {
-      toast.success(`Joined ${table.name}`)
+    if (error) {
+      toast.error(`Could not join table: ${error.message}`)
+      return
     }
+    toast.success(`Joined ${table.name}`)
     setSelectedTableId(table.id)
+    setTableManagementOpen(false)
     await loadActiveSession()
   }
 
@@ -614,64 +581,19 @@ export default function Home() {
     if (!session || !deviceId || !myMembership) return
     setTableActionPending(true)
     const tableId = myMembership.table_id
-    const { error: ordersError } = await supabase
-      .from('orders')
-      .update({ table_id: null })
-      .eq('session_id', session.id)
-      .eq('device_id', deviceId)
-      .eq('table_id', tableId)
-
-    if (ordersError) {
-      setTableActionPending(false)
-      toast.error(`Could not unassign your orders: ${ordersError.message}`)
-      return
-    }
-
-    const left = await removeMembershipAndDestroyEmpty(myMembership)
+    const { error } = await supabase.rpc('leave_order_table', {
+      p_session_id: session.id,
+      p_device_id: deviceId,
+    })
     setTableActionPending(false)
-    if (!left) {
+    if (error) {
+      toast.error(`Could not leave table: ${error.message}`)
       return
     }
     if (selectedTableId === tableId) setSelectedTableId(null)
+    setTableManagementOpen(false)
     toast('You left the table. Your orders are now unassigned.')
     await loadActiveSession()
-  }
-
-  async function removeMembershipAndDestroyEmpty(membership: TableMembership) {
-    const { error: leaveError } = await supabase
-      .from('table_memberships')
-      .delete()
-      .eq('id', membership.id)
-
-    if (leaveError) {
-      toast.error(`Could not leave table: ${leaveError.message}`)
-      return false
-    }
-
-    const { data: remainingMembers, error: membersError } = await supabase
-      .from('table_memberships')
-      .select('id')
-      .eq('table_id', membership.table_id)
-      .limit(1)
-
-    if (membersError) {
-      toast.error(`Left table, but could not check its members: ${membersError.message}`)
-      return false
-    }
-
-    if ((remainingMembers ?? []).length === 0) {
-      const { error: deleteError } = await supabase
-        .from('order_tables')
-        .delete()
-        .eq('id', membership.table_id)
-
-      if (deleteError) {
-        toast.error(`Left table, but could not remove the empty table: ${deleteError.message}`)
-        return false
-      }
-    }
-
-    return true
   }
 
   async function renameTable() {
@@ -690,60 +612,15 @@ export default function Home() {
     toast.success('Table renamed')
   }
 
-  async function addOrderOwnersToSelectedTable(orderIds: string[]) {
-    if (!session || !selectedTable || !isMemberOfSelectedTable) return true
-
-    const owners = Array.from(new Map(
-      orders
-        .filter(order => orderIds.includes(order.id) && order.device_id)
-        .map(order => [order.device_id as string, order.person_name])
-    ))
-
-    for (const [ownerDeviceId, ownerName] of owners) {
-      const { data: oldMembership, error: oldMembershipError } = await supabase
-        .from('table_memberships')
-        .select('*')
-        .eq('session_id', session.id)
-        .eq('device_id', ownerDeviceId)
-        .maybeSingle()
-
-      if (oldMembershipError) {
-        toast.error(`Could not check ${ownerName}'s current table: ${oldMembershipError.message}`)
-        return false
-      }
-
-      if (oldMembership && oldMembership.table_id !== selectedTable.id && !(await removeMembershipAndDestroyEmpty(oldMembership as TableMembership))) {
-        toast.error(`Could not move ${ownerName} into this table`)
-        return false
-      }
-
-      if (oldMembership?.table_id === selectedTable.id) continue
-
-      const { error: joinError } = await supabase
-        .from('table_memberships')
-        .insert({ session_id: session.id, table_id: selectedTable.id, device_id: ownerDeviceId, person_name: ownerName })
-
-      if (joinError) {
-        toast.error(`Could not add ${ownerName} to this table: ${joinError.message}`)
-        return false
-      }
-    }
-
-    return true
-  }
-
   async function moveOrdersToSelectedTable(orderIds: string[]) {
-    if (!selectedTable || !isMemberOfSelectedTable || orderIds.length === 0) return
+    if (!session || !deviceId || !selectedTable || !isMemberOfSelectedTable || orderIds.length === 0) return
     setTableActionPending(true)
-    const ownersAdded = await addOrderOwnersToSelectedTable(orderIds)
-    if (!ownersAdded) {
-      setTableActionPending(false)
-      return
-    }
-    const { error } = await supabase
-      .from('orders')
-      .update({ table_id: selectedTable.id })
-      .in('id', orderIds)
+    const { error } = await supabase.rpc('move_orders_to_table', {
+      p_session_id: session.id,
+      p_table_id: selectedTable.id,
+      p_actor_device_id: deviceId,
+      p_order_ids: orderIds,
+    })
     setTableActionPending(false)
     if (error) {
       toast.error(`Could not move orders: ${error.message}`)
@@ -764,6 +641,7 @@ export default function Home() {
     }
     setConfirmDeleteTableId(null)
     if (selectedTableId === table.id) setSelectedTableId(null)
+    setTableManagementOpen(false)
     toast('Table deleted. Its orders are now unassigned.')
     await loadActiveSession()
   }
@@ -993,8 +871,10 @@ export default function Home() {
               <section className="space-y-3">
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <h3 className="text-sm font-bold text-amber-900">Tables</h3>
-                    <p className="text-xs text-amber-600 mt-0.5">Optional. Orders can stay unassigned.</p>
+                    <h3 className="text-sm font-bold text-amber-900">Your table</h3>
+                    <p className="text-xs text-amber-600 mt-0.5">
+                      {myMembership ? 'New orders will go to your selected table.' : 'Optional. Orders can stay unassigned.'}
+                    </p>
                   </div>
                   <button
                     type="button"
@@ -1023,12 +903,15 @@ export default function Home() {
                           className={`rounded-lg border px-3 py-3 ${isSelected ? 'border-amber-500 bg-amber-100' : 'border-amber-100 bg-white'}`}
                         >
                           <div className="flex items-start justify-between gap-3">
-                            <button type="button" onClick={() => setSelectedTableId(table.id)} className="min-w-0 flex-1 text-left">
-                              <p className="truncate text-sm font-bold text-amber-950">{table.name}</p>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2">
+                                <p className="truncate text-sm font-bold text-amber-950">{table.name}</p>
+                                {isMine && <span className="rounded-full bg-amber-700 px-2 py-0.5 text-[10px] font-bold uppercase text-white">Yours</span>}
+                              </div>
                               <p className="mt-0.5 text-xs text-amber-700">
                                 {memberCount} member{memberCount === 1 ? '' : 's'} · {tableOrderCount} order{tableOrderCount === 1 ? '' : 's'}
                               </p>
-                            </button>
+                            </div>
                             {isMine ? (
                               <button
                                 type="button"
@@ -1051,7 +934,18 @@ export default function Home() {
                           </div>
 
                           {isSelected && isMine && (
-                            <div className="mt-3 space-y-3 border-t border-amber-200 pt-3">
+                            <div className="mt-3 border-t border-amber-200 pt-3">
+                              <button
+                                type="button"
+                                onClick={() => setTableManagementOpen(open => !open)}
+                                className="flex w-full items-center justify-between text-xs font-semibold text-amber-700"
+                              >
+                                <span>Manage table</span>
+                                <span>{tableManagementOpen ? 'Hide' : 'Show'}</span>
+                              </button>
+
+                              {tableManagementOpen && (
+                                <div className="mt-3 space-y-3">
                               {renamingTableId === table.id ? (
                                 <div className="flex gap-2">
                                   <input
@@ -1130,6 +1024,8 @@ export default function Home() {
                                 </div>
                               ) : (
                                 <button type="button" onClick={() => setConfirmDeleteTableId(table.id)} className="text-xs text-red-600">Delete table</button>
+                              )}
+                                </div>
                               )}
                             </div>
                           )}

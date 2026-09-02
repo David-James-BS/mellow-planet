@@ -211,24 +211,9 @@ export default function RoundsPage() {
   async function resumeRound(round: OrderSession) {
     setResuming(true)
     try {
-      const { error: closeError } = await supabase
-        .from('order_sessions')
-        .update({ is_active: false, closed_at: new Date().toISOString() })
-        .eq('is_active', true)
-
-      if (closeError) {
-        toast.error(`Could not close the active round: ${closeError.message}`)
-        return
-      }
-
-      const { error: resumeError } = await supabase
-        .from('order_sessions')
-        .update({ is_active: true, closed_at: null })
-        .eq('id', round.id)
-
-      if (resumeError) {
-        toast.error(`Current round was closed, but could not resume this round: ${resumeError.message}`)
-        await loadRounds()
+      const { error } = await supabase.rpc('resume_order_session', { p_session_id: round.id })
+      if (error) {
+        toast.error(`Could not resume this round: ${error.message}`)
         return
       }
 
